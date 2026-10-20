@@ -496,7 +496,7 @@ async function processAll() {
   const s = settings();
   render();
   for (const f of files) {
-    try { await compressOne(f, s); } catch (e) { f.error = true; }
+    try { await compressOne(f, s); } catch (e) { f.error = true; f.errMsg = (e && e.message) || ''; }
     render();
   }
 }
@@ -571,13 +571,32 @@ async function fitToTarget(img, w, h, mime, target, f, s) {
   return best ? { blob: best, canvas: c } : null;
 }
 
-async function compressOne(f, s) {
-  f.error = false; f.converted = false;
+function decodeMsg(f) {
+  const t = (f.name + ' ' + (f.origBlob.type || '')).toLowerCase();
+  if (/hei[cf]/.test(t))
+    return 'HEIC photo — browsers can\'t open HEIC yet. Convert it to JPG first (or switch off HEIF in your camera settings).';
+  return 'Couldn\'t open this image — the format may not be supported by your browser.';
+}
+async function loadImage(f) {
   const url = URL.createObjectURL(f.origBlob);
-  const img = await new Promise((res, rej) => {
-    const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url;
-  });
-  URL.revokeObjectURL(url);
+  try {
+    return await new Promise((res, rej) => {
+      const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url;
+    });
+  } catch (e) {
+    if (window.createImageBitmap) {
+      const bmp = await createImageBitmap(f.origBlob).catch(() => null);
+      if (bmp) return bmp;
+    }
+    throw new Error(decodeMsg(f));
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+}
+
+async function compressOne(f, s) {
+  f.error = false; f.converted = false; f.errMsg = '';
+  const img = await loadImage(f);
   const mime = s.format === 'auto' ? (f.origBlob.type || 'image/jpeg') : s.format;
   f.mime = mime;
   let w = img.width, h = img.height;
@@ -596,7 +615,7 @@ async function compressOne(f, s) {
       // already small enough — keep quality high
       const c = makeCanvas(img, w, h, mime, f, s);
       const b = await toBlobP(c, mime, mime === 'image/png' ? undefined : 0.92);
-      if (!b) throw new Error('encode failed');
+      if (!b) throw new Error('Image too large for this device — try a smaller Max width.');
       const [fw, fh] = finalDims(w, h, f);
       setOut(f, b, c, fw, fh);
       return;
@@ -621,15 +640,21 @@ async function compressOne(f, s) {
         hit = jhit; f.mime = 'image/jpeg'; f.converted = true;
       }
     }
-    if (!hit) throw new Error('cannot reach target');
+    if (!hit) throw new Error('Could not reach that target size for this image.');
     const [fw, fh] = finalDims(hit.sw, hit.sh, f);
     setOut(f, hit.blob, hit.canvas, fw, fh);
     return;
   }
 
-  const c = makeCanvas(img, w, h, mime, f, s);
-  const b = await toBlobP(c, mime, mime === 'image/png' ? undefined : s.q);
-  if (!b) throw new Error('encode failed');
+  let c = makeCanvas(img, w, h, mime, f, s);
+  let b = await toBlobP(c, mime, mime === 'image/png' ? undefined : s.q);
+  if (!b) {
+    // encoder returned nothing — usually device memory. Retry at half size.
+    w = Math.max(8, Math.round(w / 2)); h = Math.max(8, Math.round(h / 2));
+    c = makeCanvas(img, w, h, mime, f, s);
+    b = await toBlobP(c, mime, mime === 'image/png' ? undefined : s.q);
+  }
+  if (!b) throw new Error('Image too large for this device — try a smaller Max width.');
   const [fw, fh] = finalDims(w, h, f);
   setOut(f, b, c, fw, fh);
 }
@@ -637,7 +662,7 @@ async function compressOne(f, s) {
 async function reprocessOne(f) {
   f.outBlob = null; f.outSize = null; f.thumb = null;
   render();
-  try { await compressOne(f, settings()); } catch (e) { f.error = true; }
+  try { await compressOne(f, settings()); } catch (e) { f.error = true; f.errMsg = (e && e.message) || ''; }
   render();
 }
 
@@ -672,7 +697,7 @@ function render() {
         <div class="meta">${f.dims ? f.dims + ' · ' : ''}${fmtSize(f.origSize)} → ${f.outSize != null ? '<b>' + fmtSize(f.outSize) + '</b>' : '<span class="spinner"></span> compressing…'}
         ${exifLine(f)}
         ${f.converted && f.outSize != null ? '<br><span style="color:var(--accent2)">→ converted to JPEG to fit size</span>' : ''}
-        ${f.error ? '<br><span style="color:var(--red)">⚠ failed to process</span>' : ''}</div>
+        ${f.error ? '<br><span style="color:var(--red)">⚠ ' + escapeHtml(f.errMsg || 'failed to process') + '</span>' : ''}</div>
         <div class="row">
           <button class="btn primary" data-i="${i}" ${f.outBlob ? '' : 'disabled'}>⬇ Save</button>
           <button class="btn ghost rm" data-r="${i}" title="Remove">✕</button>
