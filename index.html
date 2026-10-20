@@ -161,8 +161,19 @@ footer a { color: var(--accent2); text-decoration: none; font-weight: 600; }
   <div class="card">
     <div class="settings">
       <div class="field">
+        <label>Mode</label>
+        <div class="fmt" id="mode">
+          <button data-m="quality" class="active">Quality</button>
+          <button data-m="target">🎯 Target size</button>
+        </div>
+      </div>
+      <div class="field" id="qfield">
         <label>Quality — <span class="val" id="qval">80%</span></label>
         <input type="range" id="quality" min="10" max="100" value="80">
+      </div>
+      <div class="field hidden" id="targetfield">
+        <label>Target size (KB)</label>
+        <input type="number" id="targetkb" value="100" min="5" step="5">
       </div>
       <div class="field">
         <label>Max width (px)</label>
@@ -242,13 +253,23 @@ function addFiles(list) {
 }
 
 // ---------- settings (auto re-compress, debounced) ----------
+let compMode = 'quality';
 let debounce = null;
 function scheduleReprocess() {
   clearTimeout(debounce);
   debounce = setTimeout(() => { if (files.length) processAll(); }, 450);
 }
+$('mode').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  compMode = b.dataset.m;
+  $('mode').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+  $('qfield').classList.toggle('hidden', compMode === 'target');
+  $('targetfield').classList.toggle('hidden', compMode !== 'target');
+  scheduleReprocess();
+});
 $('quality').addEventListener('input', () => { $('qval').textContent = $('quality').value + '%'; scheduleReprocess(); });
 $('maxw').addEventListener('change', scheduleReprocess);
+$('targetkb').addEventListener('change', scheduleReprocess);
 $('fmt').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   format = b.dataset.f;
@@ -258,7 +279,13 @@ $('fmt').addEventListener('click', e => {
 $('clear').addEventListener('click', () => { files.length = 0; render(); });
 
 function settings() {
-  return { q: parseInt($('quality').value, 10) / 100, maxw: parseInt($('maxw').value, 10) || 0, format };
+  return {
+    q: parseInt($('quality').value, 10) / 100,
+    maxw: parseInt($('maxw').value, 10) || 0,
+    format,
+    mode: compMode,
+    targetKB: parseInt($('targetkb').value, 10) || 100
+  };
 }
 
 async function processAll() {
@@ -270,32 +297,89 @@ async function processAll() {
   }
 }
 
-function compressOne(f, s) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(f.origBlob);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      let { width: w, height: h } = img;
-      if (s.maxw > 0 && w > s.maxw) { h = Math.round(h * s.maxw / w); w = s.maxw; }
-      const c = document.createElement('canvas');
-      c.width = w; c.height = h;
-      const ctx = c.getContext('2d');
-      const mime = s.format === 'auto' ? (f.origBlob.type || 'image/jpeg') : s.format;
-      if (mime === 'image/jpeg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); }
-      ctx.drawImage(img, 0, 0, w, h);
-      f.mime = mime;
-      f.dims = w + '×' + h;
-      c.toBlob(b => {
-        if (!b) return reject(new Error('encode failed'));
-        f.outBlob = b; f.outSize = b.size;
-        f.thumb = c.toDataURL('image/jpeg', 0.7);
-        resolve();
-      }, mime, mime === 'image/png' ? undefined : s.q);
-    };
-    img.onerror = reject;
-    img.src = url;
+function makeCanvas(img, w, h, mime) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  if (mime === 'image/jpeg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); }
+  ctx.drawImage(img, 0, 0, w, h);
+  return c;
+}
+const toBlobP = (c, mime, q) => new Promise(r => c.toBlob(b => r(b), mime, q));
+
+function setOut(f, blob, canvas, w, h) {
+  f.outBlob = blob; f.outSize = blob.size;
+  f.dims = w + '×' + h;
+  f.thumb = canvas.toDataURL('image/jpeg', 0.7);
+}
+
+// Binary-search the highest quality whose encoded size fits the target.
+async function fitToTarget(img, w, h, mime, target) {
+  const c = makeCanvas(img, w, h, mime);
+  if (mime === 'image/png') {
+    const b = await toBlobP(c, mime, undefined); // lossless: quality has no effect
+    return b && b.size <= target ? { blob: b, canvas: c } : null;
+  }
+  let lo = 0.03, hi = 1.0, best = null;
+  for (let i = 0; i < 9; i++) {
+    const q = (lo + hi) / 2;
+    const b = await toBlobP(c, mime, q);
+    if (!b) break;
+    if (b.size <= target) { best = b; lo = q; } else { hi = q; }
+  }
+  return best ? { blob: best, canvas: c } : null;
+}
+
+async function compressOne(f, s) {
+  const url = URL.createObjectURL(f.origBlob);
+  const img = await new Promise((res, rej) => {
+    const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url;
   });
+  URL.revokeObjectURL(url);
+  const mime = s.format === 'auto' ? (f.origBlob.type || 'image/jpeg') : s.format;
+  f.mime = mime;
+  let w = img.width, h = img.height;
+  if (s.maxw > 0 && w > s.maxw) { h = Math.round(h * s.maxw / w); w = s.maxw; }
+
+  if (s.mode === 'target') {
+    const target = Math.max(5, s.targetKB) * 1024;
+    if (f.origSize <= target) {
+      // already small enough — keep quality high
+      const c = makeCanvas(img, w, h, mime);
+      const b = await toBlobP(c, mime, mime === 'image/png' ? undefined : 0.92);
+      if (!b) throw new Error('encode failed');
+      setOut(f, b, c, w, h);
+      return;
+    }
+    // fit at current dims; shrink dimensions progressively if quality alone can't do it
+    const tryFit = async (useMime) => {
+      let scale = 1;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const sw = Math.max(8, Math.round(w * scale)), sh = Math.max(8, Math.round(h * scale));
+        const hit = await fitToTarget(img, sw, sh, useMime, target);
+        if (hit) return { ...hit, sw, sh };
+        scale *= 0.78;
+      }
+      return null;
+    };
+    let hit = await tryFit(mime);
+    if (mime === 'image/png' && s.format === 'auto') {
+      // PNG is lossless — it may have shrunk to tiny dims to fit. If JPEG keeps
+      // bigger dimensions under the same target, prefer that.
+      const jhit = await tryFit('image/jpeg');
+      if (jhit && (!hit || jhit.sw * jhit.sh > hit.sw * hit.sh)) {
+        hit = jhit; f.mime = 'image/jpeg'; f.converted = true;
+      }
+    }
+    if (!hit) throw new Error('cannot reach target');
+    setOut(f, hit.blob, hit.canvas, hit.sw, hit.sh);
+    return;
+  }
+
+  const c = makeCanvas(img, w, h, mime);
+  const b = await toBlobP(c, mime, mime === 'image/png' ? undefined : s.q);
+  if (!b) throw new Error('encode failed');
+  setOut(f, b, c, w, h);
 }
 
 // ---------- render ----------
@@ -327,6 +411,7 @@ function render() {
       <div class="body">
         <div class="fname" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
         <div class="meta">${f.dims ? f.dims + ' · ' : ''}${fmtSize(f.origSize)} → ${f.outSize != null ? '<b>' + fmtSize(f.outSize) + '</b>' : '<span class="spinner"></span> compressing…'}
+        ${f.converted && f.outSize != null ? '<br><span style="color:var(--accent2)">→ converted to JPEG to fit size</span>' : ''}
         ${f.error ? '<br><span style="color:var(--red)">⚠ failed to process</span>' : ''}</div>
         <div class="row">
           <button class="btn primary" data-i="${i}" ${f.outBlob ? '' : 'disabled'}>⬇ Save</button>
