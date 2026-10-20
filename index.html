@@ -132,6 +132,15 @@ kbd { background: rgba(255,255,255,.1); border: 1px solid var(--border); border-
 @keyframes spin { to { transform: rotate(360deg); } }
 footer { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 2.2rem; }
 footer a { color: var(--accent2); text-decoration: none; font-weight: 600; }
+.xlinks { text-align: center; margin-top: 2.4rem; }
+.xlinks .t { font-size: .78rem; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); font-weight: 700; margin-bottom: .8rem; }
+.xlinks .row { display: flex; justify-content: center; gap: .7rem; flex-wrap: wrap; }
+.xlinks a { display: flex; align-items: center; gap: .55rem; padding: .7rem 1.15rem; border-radius: 14px;
+  background: var(--card); border: 1px solid var(--border); color: var(--text); text-decoration: none;
+  font-size: .9rem; font-weight: 600; transition: all .2s; }
+.xlinks a:hover { border-color: var(--accent2); transform: translateY(-2px); background: rgba(20,184,166,.1); }
+.xlinks a small { display: block; font-weight: 400; color: var(--muted); font-size: .75rem; }
+.xlinks a .ic { font-size: 1.35rem; }
 .hidden { display: none !important; }
 @media (max-width: 560px) {
   .field input[type="range"] { width: 150px; }
@@ -232,6 +241,14 @@ footer a { color: var(--accent2); text-decoration: none; font-weight: 600; }
       </div>
     </div>
     <div class="grid" id="list"><div class="empty">No images yet — drop some above 👆</div></div>
+  </div>
+
+  <div class="xlinks">
+    <div class="t">More free tools by nuvish</div>
+    <div class="row">
+      <a href="https://nuvishh.github.io/EverQR/" target="_blank" rel="noopener"><span class="ic">🔳</span><span>EverQR<small>QR code generator</small></span></a>
+      <a href="https://nuvishh.github.io/Beamo-Web/" target="_blank" rel="noopener"><span class="ic">⚡</span><span>Beamo Web<small>Share files browser-to-browser</small></span></a>
+    </div>
   </div>
 
   <footer>Made with <span style="color:#f43f5e">♥</span> by <a href="https://nuvishh.github.io/">nuvish</a> · PixLite is free forever</footer>
