@@ -92,6 +92,32 @@ kbd { background: rgba(255,255,255,.1); border: 1px solid var(--border); border-
 .tbtn { flex: 1; background: rgba(255,255,255,.06); border: 1px solid var(--border); color: var(--text);
   border-radius: 8px; padding: .38rem 0; cursor: pointer; font-size: .95rem; font-family: inherit; transition: background .15s; }
 .tbtn:hover { background: rgba(45,212,191,.18); }
+/* compare modal */
+#cmp-modal { position: fixed; inset: 0; z-index: 120; display: none; }
+#cmp-modal.show { display: block; }
+.cmp-backdrop { position: absolute; inset: 0; background: rgba(2,12,18,.85); backdrop-filter: blur(3px); }
+.cmp-box { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(92vw, 760px); background: #0a2432; border: 1px solid var(--border); border-radius: 18px;
+  padding: 1rem 1.2rem 1.3rem; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+.cmp-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .8rem; gap: .6rem; }
+.cmp-head .fname { font-weight: 600; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-head .btn { padding: .4rem .8rem; }
+.cmp-stage { position: relative; width: 100%; max-height: 60vh; border-radius: 12px; overflow: hidden;
+  background: #06141c; --cmp: 50%; }
+.cmp-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cmp-before { clip-path: inset(0 calc(100% - var(--cmp)) 0 0); }
+.cmp-line { position: absolute; top: 0; bottom: 0; left: var(--cmp); width: 2px; background: #22d3ee;
+  box-shadow: 0 0 12px rgba(34,211,238,.8); }
+.cmp-handle { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 38px; height: 38px; border-radius: 50%; background: #22d3ee; color: #04222b;
+  display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.1rem;
+  box-shadow: 0 4px 16px rgba(34,211,238,.5); }
+.cmp-tag { position: absolute; top: .7rem; font-size: .72rem; font-weight: 700; letter-spacing: 1px;
+  padding: .3rem .65rem; border-radius: 7px; background: rgba(0,0,0,.65); color: #fff; }
+.cmp-tag.b { left: .7rem; } .cmp-tag.a { right: .7rem; }
+#cmp-slider { width: 100%; margin-top: .9rem; accent-color: var(--accent2); }
+.cmp-meta { font-size: .82rem; color: var(--muted); margin-top: .55rem; text-align: center; }
+.cmp-meta b { color: var(--text); }
 .fmt { display: flex; gap: .35rem; background: rgba(0,0,0,.25); border: 1px solid var(--border);
   border-radius: 12px; padding: .3rem; }
 .fmt button { border: none; background: transparent; color: var(--muted); padding: .45rem .95rem;
@@ -200,6 +226,18 @@ footer a { color: var(--accent2); text-decoration: none; font-weight: 600; }
         <input type="number" id="maxw" value="1920" min="0" step="100">
       </div>
       <div class="field">
+        <label>📐 Size preset</label>
+        <select id="preset">
+          <option value="" selected>None — keep aspect</option>
+          <option value="1080x1080">Instagram Post · 1080×1080</option>
+          <option value="1080x1920">Story / Reel · 1080×1920</option>
+          <option value="1280x720">YouTube Thumb · 1280×720</option>
+          <option value="1600x900">X / Twitter · 1600×900</option>
+          <option value="1200x630">Facebook / OG · 1200×630</option>
+          <option value="413x531">Passport Photo · 413×531</option>
+        </select>
+      </div>
+      <div class="field">
         <label>Format</label>
         <div class="fmt" id="fmt">
           <button data-f="auto" class="active">Auto</button>
@@ -254,6 +292,24 @@ footer a { color: var(--accent2); text-decoration: none; font-weight: 600; }
   <footer>Made with <span style="color:#f43f5e">♥</span> by <a href="https://nuvishh.github.io/">nuvish</a> · PixLite is free forever</footer>
 </div>
 
+<div id="cmp-modal">
+  <div class="cmp-backdrop" id="cmp-backdrop"></div>
+  <div class="cmp-box">
+    <div class="cmp-head">
+      <span class="fname" id="cmp-name"></span>
+      <button class="btn ghost" id="cmp-close">✕ Close</button>
+    </div>
+    <div class="cmp-stage" id="cmp-stage">
+      <img id="cmp-after" alt="After">
+      <img id="cmp-before" class="cmp-before" alt="Before">
+      <div class="cmp-line"><div class="cmp-handle">↔</div></div>
+      <span class="cmp-tag b">BEFORE</span><span class="cmp-tag a">AFTER</span>
+    </div>
+    <input type="range" id="cmp-slider" min="0" max="100" value="50">
+    <div class="cmp-meta" id="cmp-meta"></div>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const files = []; // {id, name, origBlob, origSize, outBlob, outSize, dims, mime, thumb, error}
@@ -292,12 +348,103 @@ window.addEventListener('paste', e => {
 
 function addFiles(list) {
   const imgs = [...list].filter(f => f.type.startsWith('image/'));
-  imgs.forEach((f, i) => files.push({
+  const news = imgs.map((f, i) => ({
     id: Math.random().toString(36).slice(2),
     name: f.name || ('pasted-image-' + Date.now() + '-' + i + '.png'),
-    origBlob: f, origSize: f.size
+    origBlob: f, origSize: f.size, exif: undefined
   }));
+  files.push(...news);
+  news.forEach(f => readExif(f.origBlob).then(ex => { f.exif = ex; render(); }).catch(() => { f.exif = null; }));
   if (imgs.length) processAll();
+}
+
+// ---------- EXIF (JPEG APP1/TIFF, minimal reader) ----------
+async function readExif(blob) {
+  try {
+    const buf = new Uint8Array(await blob.slice(0, 262144).arrayBuffer());
+    if (buf.length < 4 || buf[0] !== 0xFF || buf[1] !== 0xD8) return null;
+    let off = 2;
+    while (off < buf.length - 8) {
+      if (buf[off] !== 0xFF) break;
+      const marker = buf[off + 1];
+      const len = (buf[off + 2] << 8) | buf[off + 3];
+      if (marker === 0xE1 && buf[off + 4] === 0x45 && buf[off + 5] === 0x78 && buf[off + 6] === 0x69 && buf[off + 7] === 0x66 && buf[off + 8] === 0)
+        return parseTiff(buf, off + 10);
+      if (marker === 0xDA || len < 2) break;
+      off += 2 + len;
+    }
+    return null;
+  } catch (e) { return null; }
+}
+function parseTiff(buf, t0) {
+  try {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const le = buf[t0] === 0x49 && buf[t0 + 1] === 0x49;
+    const u16 = o => dv.getUint16(t0 + o, le), u32 = o => dv.getUint32(t0 + o, le);
+    if (u16(2) !== 42) return null;
+    const TSZ = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8 };
+    const valOff = (eOff, type, count) => TSZ[type] * count <= 4 ? eOff + 8 : u32(eOff + 8);
+    const ascii = (eOff, type, count) => {
+      const o = t0 + valOff(eOff, type, count); let s = '';
+      for (let i = 0; i < count && buf[o + i]; i++) s += String.fromCharCode(buf[o + i]);
+      return s.trim();
+    };
+    const num = (eOff, type, count) => {
+      const o = t0 + valOff(eOff, type, count);
+      if (type === 3) return dv.getUint16(o, le);
+      if (type === 4) return dv.getUint32(o, le);
+      if (type === 9) return dv.getInt32(o, le);
+      if (type === 5 || type === 10) {
+        const n = type === 5 ? dv.getUint32(o, le) : dv.getInt32(o, le);
+        const d = type === 5 ? dv.getUint32(o + 4, le) : dv.getInt32(o + 4, le);
+        return d ? n / d : 0;
+      }
+      return 0;
+    };
+    const ifd = off => {
+      const tags = {}, n = u16(off);
+      for (let i = 0; i < n; i++) {
+        const e = off + 2 + i * 12;
+        tags[u16(e)] = { type: u16(e + 2), count: u32(e + 4), eOff: e };
+      }
+      return tags;
+    };
+    const str = (tags, id) => tags[id] ? ascii(tags[id].eOff, tags[id].type, tags[id].count) : '';
+    const val = (tags, id) => tags[id] ? num(tags[id].eOff, tags[id].type, tags[id].count) : 0;
+    const ifd0 = ifd(u32(4));
+    const out = {
+      make: str(ifd0, 0x010F), model: str(ifd0, 0x0110),
+      date: str(ifd0, 0x0132), gps: false, iso: 0, fnum: 0, exp: 0, focal: 0
+    };
+    if (ifd0[0x8769]) {
+      const ex = ifd(val(ifd0, 0x8769));
+      out.date = str(ex, 0x9003) || out.date;
+      out.iso = val(ex, 0x8827); out.fnum = val(ex, 0x829D);
+      out.exp = val(ex, 0x829A); out.focal = val(ex, 0x920A);
+    }
+    if (ifd0[0x8825]) {
+      const gp = ifd(val(ifd0, 0x8825));
+      out.gps = !!(gp[0x0002] && gp[0x0004]);
+    }
+    return (out.make || out.model || out.date) ? out : (out.gps ? out : null);
+  } catch (e) { return null; }
+}
+function exifLine(f) {
+  const e = f.exif;
+  if (e === undefined) return '';
+  if (!e) return '<br><span style="opacity:.7">🏷️ No EXIF data in this file</span>';
+  const bits = [];
+  const cam = (e.make + ' ' + e.model).trim();
+  if (cam) bits.push('📷 ' + escapeHtml(cam));
+  if (e.fnum) bits.push('f/' + (+e.fnum.toFixed(1)));
+  if (e.iso) bits.push('ISO ' + e.iso);
+  if (e.focal) bits.push(Math.round(e.focal) + 'mm');
+  if (e.exp) bits.push(e.exp >= 1 ? e.exp + 's' : '1/' + Math.round(1 / e.exp) + 's');
+  let s = '<br><span style="opacity:.85">' + bits.join(' · ') + '</span>';
+  s += e.gps
+    ? '<br><span style="color:#fbbf24">🛰️ GPS in original — stripped in output ✓</span>'
+    : '<br><span style="opacity:.7">Metadata stripped in output ✓</span>';
+  return s;
 }
 
 // ---------- settings (auto re-compress, debounced) ----------
@@ -317,6 +464,7 @@ $('mode').addEventListener('click', e => {
 });
 $('quality').addEventListener('input', () => { $('qval').textContent = $('quality').value + '%'; scheduleReprocess(); });
 $('maxw').addEventListener('change', scheduleReprocess);
+$('preset').addEventListener('change', scheduleReprocess);
 $('targetkb').addEventListener('change', scheduleReprocess);
 $('wmtext').addEventListener('input', scheduleReprocess);
 $('wmpos').addEventListener('change', scheduleReprocess);
@@ -330,12 +478,14 @@ $('fmt').addEventListener('click', e => {
 $('clear').addEventListener('click', () => { files.length = 0; render(); });
 
 function settings() {
+  const pv = $('preset').value;
   return {
     q: parseInt($('quality').value, 10) / 100,
     maxw: parseInt($('maxw').value, 10) || 0,
     format,
     mode: compMode,
     targetKB: parseInt($('targetkb').value, 10) || 100,
+    preset: pv ? { w: +pv.split('x')[0], h: +pv.split('x')[1] } : null,
     wmText: $('wmtext').value || '',
     wmOpacity: parseInt($('wmopacity').value, 10) / 100,
     wmPos: $('wmpos').value
@@ -387,7 +537,11 @@ function makeCanvas(img, w, h, mime, f, s) {
   ctx.translate(cw / 2, ch / 2);
   ctx.rotate((f.rot || 0) * Math.PI / 180);
   ctx.scale(f.flipH ? -1 : 1, f.flipV ? -1 : 1);
-  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  if (f.crop) {
+    ctx.drawImage(img, f.crop.sx, f.crop.sy, f.crop.sw, f.crop.sh, -w / 2, -h / 2, w, h);
+  } else {
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  }
   ctx.restore();
   if (s) drawWatermark(ctx, cw, ch, s);
   return c;
@@ -427,11 +581,18 @@ async function compressOne(f, s) {
   const mime = s.format === 'auto' ? (f.origBlob.type || 'image/jpeg') : s.format;
   f.mime = mime;
   let w = img.width, h = img.height;
-  if (s.maxw > 0 && w > s.maxw) { h = Math.round(h * s.maxw / w); w = s.maxw; }
+  f.crop = null;
+  if (s.preset) {
+    // exact preset size with center cover-crop
+    const sc = Math.max(s.preset.w / w, s.preset.h / h);
+    const sw = Math.round(s.preset.w / sc), sh = Math.round(s.preset.h / sc);
+    f.crop = { sx: Math.round((w - sw) / 2), sy: Math.round((h - sh) / 2), sw, sh };
+    w = s.preset.w; h = s.preset.h;
+  } else if (s.maxw > 0 && w > s.maxw) { h = Math.round(h * s.maxw / w); w = s.maxw; }
 
   if (s.mode === 'target') {
     const target = Math.max(5, s.targetKB) * 1024;
-    if (f.origSize <= target && !(s.wmText || '').trim() && !f.rot && !f.flipH && !f.flipV) {
+    if (f.origSize <= target && !(s.wmText || '').trim() && !f.rot && !f.flipH && !f.flipV && !s.preset) {
       // already small enough — keep quality high
       const c = makeCanvas(img, w, h, mime, f, s);
       const b = await toBlobP(c, mime, mime === 'image/png' ? undefined : 0.92);
@@ -509,6 +670,7 @@ function render() {
       <div class="body">
         <div class="fname" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
         <div class="meta">${f.dims ? f.dims + ' · ' : ''}${fmtSize(f.origSize)} → ${f.outSize != null ? '<b>' + fmtSize(f.outSize) + '</b>' : '<span class="spinner"></span> compressing…'}
+        ${exifLine(f)}
         ${f.converted && f.outSize != null ? '<br><span style="color:var(--accent2)">→ converted to JPEG to fit size</span>' : ''}
         ${f.error ? '<br><span style="color:var(--red)">⚠ failed to process</span>' : ''}</div>
         <div class="row">
@@ -520,6 +682,9 @@ function render() {
           <button class="tbtn" data-rr="${i}" title="Rotate right 90°">↻</button>
           <button class="tbtn" data-fh="${i}" title="Flip horizontal">⇋</button>
           <button class="tbtn" data-fv="${i}" title="Flip vertical">⇅</button>
+        </div>
+        <div class="trow">
+          <button class="tbtn" data-cmp="${i}" ${f.outBlob ? '' : 'disabled'} title="Before / after compare">🔍 Compare</button>
         </div>
       </div>`;
     list.appendChild(d);
@@ -543,7 +708,31 @@ function render() {
   list.querySelectorAll('[data-fv]').forEach(b => b.onclick = () => {
     const f = files[+b.dataset.fv]; f.flipV = !f.flipV; reprocessOne(f);
   });
+  list.querySelectorAll('[data-cmp]').forEach(b => b.onclick = () => openCompare(files[+b.dataset.cmp]));
 }
+
+// ---------- before / after compare ----------
+let cmpUrls = [];
+function openCompare(f) {
+  if (!f.outBlob) return;
+  cmpUrls.forEach(u => URL.revokeObjectURL(u));
+  const u1 = URL.createObjectURL(f.origBlob), u2 = URL.createObjectURL(f.outBlob);
+  cmpUrls = [u1, u2];
+  $('cmp-before').src = u1;
+  $('cmp-after').src = u2;
+  $('cmp-name').textContent = f.name;
+  const [ow, oh] = (f.dims || '4x3').split('×');
+  $('cmp-stage').style.aspectRatio = (ow || 4) + ' / ' + (oh || 3);
+  $('cmp-stage').style.setProperty('--cmp', '50%');
+  $('cmp-slider').value = 50;
+  $('cmp-meta').innerHTML = 'Original <b>' + fmtSize(f.origSize) + '</b> → Compressed <b>' + fmtSize(f.outSize) + '</b>' + (f.dims ? ' · ' + f.dims : '');
+  $('cmp-modal').classList.add('show');
+}
+function closeCompare() { $('cmp-modal').classList.remove('show'); }
+$('cmp-close').addEventListener('click', closeCompare);
+$('cmp-backdrop').addEventListener('click', closeCompare);
+$('cmp-slider').addEventListener('input', () => $('cmp-stage').style.setProperty('--cmp', $('cmp-slider').value + '%'));
+window.addEventListener('keydown', e => { if (e.key === 'Escape') closeCompare(); });
 
 function baseName(n) {
   return n.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9-_ ]/g, '').replace(/\s+/g, '-').slice(0, 50) || 'image';
