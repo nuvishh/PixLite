@@ -578,19 +578,22 @@ function decodeMsg(f) {
   return 'Couldn\'t open this image — the format may not be supported by your browser.';
 }
 async function loadImage(f) {
+  // Decode ONCE and cache: re-decoding a big phone photo on every rotate /
+  // settings change runs out of memory on mobile browsers and fails.
+  if (f.decoded) return f.decoded;
   const url = URL.createObjectURL(f.origBlob);
   try {
-    return await new Promise((res, rej) => {
+    const img = await new Promise((res, rej) => {
       const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url;
     });
+    f.decoded = img;
+    return img;
   } catch (e) {
     if (window.createImageBitmap) {
       const bmp = await createImageBitmap(f.origBlob).catch(() => null);
-      if (bmp) return bmp;
+      if (bmp) { f.decoded = bmp; return bmp; }
     }
     throw new Error(decodeMsg(f));
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 }
 
