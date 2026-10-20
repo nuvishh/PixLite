@@ -81,6 +81,17 @@ kbd { background: rgba(255,255,255,.1); border: 1px solid var(--border); border-
 .field input[type="number"] { width: 110px; padding: .55rem .7rem; border-radius: 10px;
   border: 1px solid var(--border); background: rgba(0,0,0,.25); color: var(--text);
   font-size: .92rem; font-family: inherit; }
+.field input[type="text"] { width: 200px; padding: .55rem .7rem; border-radius: 10px;
+  border: 1px solid var(--border); background: rgba(0,0,0,.25); color: var(--text);
+  font-size: .92rem; font-family: inherit; }
+.field select { padding: .55rem .7rem; border-radius: 10px; border: 1px solid var(--border);
+  background: rgba(11,46,61,.9); color: var(--text); font-size: .92rem; font-family: inherit; }
+.wmrow { display: flex; flex-wrap: wrap; gap: 1.4rem 2rem; align-items: flex-end;
+  margin-top: 1.25rem; border-top: 1px solid var(--border); padding-top: 1.25rem; }
+.item .trow { display: flex; gap: .4rem; margin-top: .45rem; }
+.tbtn { flex: 1; background: rgba(255,255,255,.06); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: .38rem 0; cursor: pointer; font-size: .95rem; font-family: inherit; transition: background .15s; }
+.tbtn:hover { background: rgba(45,212,191,.18); }
 .fmt { display: flex; gap: .35rem; background: rgba(0,0,0,.25); border: 1px solid var(--border);
   border-radius: 12px; padding: .3rem; }
 .fmt button { border: none; background: transparent; color: var(--muted); padding: .45rem .95rem;
@@ -189,6 +200,26 @@ footer a { color: var(--accent2); text-decoration: none; font-weight: 600; }
         </div>
       </div>
     </div>
+    <div class="wmrow">
+      <div class="field">
+        <label>©️ Watermark text</label>
+        <input type="text" id="wmtext" placeholder="e.g. © nuvish" maxlength="60">
+      </div>
+      <div class="field">
+        <label>Position</label>
+        <select id="wmpos">
+          <option value="br" selected>Bottom-right</option>
+          <option value="bl">Bottom-left</option>
+          <option value="tr">Top-right</option>
+          <option value="tl">Top-left</option>
+          <option value="c">Center</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Opacity — <span class="val" id="wmoval">70%</span></label>
+        <input type="range" id="wmopacity" min="10" max="100" value="70">
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -196,7 +227,7 @@ footer a { color: var(--accent2); text-decoration: none; font-weight: 600; }
       <h2>Results</h2>
       <div class="stats" id="stats"></div>
       <div class="actions">
-        <button class="btn primary" id="dlall" disabled>⬇ Download all</button>
+        <button class="btn primary" id="dlall" disabled>📦 Download all (ZIP)</button>
         <button class="btn ghost" id="clear" disabled>✕ Clear</button>
       </div>
     </div>
@@ -270,6 +301,9 @@ $('mode').addEventListener('click', e => {
 $('quality').addEventListener('input', () => { $('qval').textContent = $('quality').value + '%'; scheduleReprocess(); });
 $('maxw').addEventListener('change', scheduleReprocess);
 $('targetkb').addEventListener('change', scheduleReprocess);
+$('wmtext').addEventListener('input', scheduleReprocess);
+$('wmpos').addEventListener('change', scheduleReprocess);
+$('wmopacity').addEventListener('input', () => { $('wmoval').textContent = $('wmopacity').value + '%'; scheduleReprocess(); });
 $('fmt').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   format = b.dataset.f;
@@ -284,7 +318,10 @@ function settings() {
     maxw: parseInt($('maxw').value, 10) || 0,
     format,
     mode: compMode,
-    targetKB: parseInt($('targetkb').value, 10) || 100
+    targetKB: parseInt($('targetkb').value, 10) || 100,
+    wmText: $('wmtext').value || '',
+    wmOpacity: parseInt($('wmopacity').value, 10) / 100,
+    wmPos: $('wmpos').value
   };
 }
 
@@ -297,12 +334,45 @@ async function processAll() {
   }
 }
 
-function makeCanvas(img, w, h, mime) {
+function finalDims(w, h, f) { return ((f.rot || 0) % 180 !== 0) ? [h, w] : [w, h]; }
+
+function drawWatermark(ctx, W, H, s) {
+  const text = (s.wmText || '').trim();
+  if (!text) return;
+  const size = Math.max(13, Math.round(W * 0.042));
+  ctx.save();
+  ctx.font = '600 ' + size + 'px "Segoe UI", system-ui, sans-serif';
+  ctx.globalAlpha = s.wmOpacity;
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = Math.max(2, size * 0.16);
+  ctx.shadowOffsetY = 2;
+  const pad = Math.round(W * 0.03);
+  let x, y;
+  if (s.wmPos === 'tl') { ctx.textAlign = 'left'; x = pad; y = pad + size; }
+  else if (s.wmPos === 'tr') { ctx.textAlign = 'right'; x = W - pad; y = pad + size; }
+  else if (s.wmPos === 'bl') { ctx.textAlign = 'left'; x = pad; y = H - pad; }
+  else if (s.wmPos === 'c') { ctx.textAlign = 'center'; x = W / 2; y = H / 2; }
+  else { ctx.textAlign = 'right'; x = W - pad; y = H - pad; }
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+// Draw the (resized) image onto a canvas, applying the file's rotate/flip
+// transforms and the watermark. w,h are the pre-rotation target dims.
+function makeCanvas(img, w, h, mime, f, s) {
+  const [cw, ch] = finalDims(w, h, f);
   const c = document.createElement('canvas');
-  c.width = w; c.height = h;
+  c.width = cw; c.height = ch;
   const ctx = c.getContext('2d');
-  if (mime === 'image/jpeg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); }
-  ctx.drawImage(img, 0, 0, w, h);
+  if (mime === 'image/jpeg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch); }
+  ctx.save();
+  ctx.translate(cw / 2, ch / 2);
+  ctx.rotate((f.rot || 0) * Math.PI / 180);
+  ctx.scale(f.flipH ? -1 : 1, f.flipV ? -1 : 1);
+  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  ctx.restore();
+  if (s) drawWatermark(ctx, cw, ch, s);
   return c;
 }
 const toBlobP = (c, mime, q) => new Promise(r => c.toBlob(b => r(b), mime, q));
@@ -314,8 +384,8 @@ function setOut(f, blob, canvas, w, h) {
 }
 
 // Binary-search the highest quality whose encoded size fits the target.
-async function fitToTarget(img, w, h, mime, target) {
-  const c = makeCanvas(img, w, h, mime);
+async function fitToTarget(img, w, h, mime, target, f, s) {
+  const c = makeCanvas(img, w, h, mime, f, s);
   if (mime === 'image/png') {
     const b = await toBlobP(c, mime, undefined); // lossless: quality has no effect
     return b && b.size <= target ? { blob: b, canvas: c } : null;
@@ -331,6 +401,7 @@ async function fitToTarget(img, w, h, mime, target) {
 }
 
 async function compressOne(f, s) {
+  f.error = false; f.converted = false;
   const url = URL.createObjectURL(f.origBlob);
   const img = await new Promise((res, rej) => {
     const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url;
@@ -343,12 +414,13 @@ async function compressOne(f, s) {
 
   if (s.mode === 'target') {
     const target = Math.max(5, s.targetKB) * 1024;
-    if (f.origSize <= target) {
+    if (f.origSize <= target && !(s.wmText || '').trim() && !f.rot && !f.flipH && !f.flipV) {
       // already small enough — keep quality high
-      const c = makeCanvas(img, w, h, mime);
+      const c = makeCanvas(img, w, h, mime, f, s);
       const b = await toBlobP(c, mime, mime === 'image/png' ? undefined : 0.92);
       if (!b) throw new Error('encode failed');
-      setOut(f, b, c, w, h);
+      const [fw, fh] = finalDims(w, h, f);
+      setOut(f, b, c, fw, fh);
       return;
     }
     // fit at current dims; shrink dimensions progressively if quality alone can't do it
@@ -356,7 +428,7 @@ async function compressOne(f, s) {
       let scale = 1;
       for (let attempt = 0; attempt < 8; attempt++) {
         const sw = Math.max(8, Math.round(w * scale)), sh = Math.max(8, Math.round(h * scale));
-        const hit = await fitToTarget(img, sw, sh, useMime, target);
+        const hit = await fitToTarget(img, sw, sh, useMime, target, f, s);
         if (hit) return { ...hit, sw, sh };
         scale *= 0.78;
       }
@@ -372,14 +444,23 @@ async function compressOne(f, s) {
       }
     }
     if (!hit) throw new Error('cannot reach target');
-    setOut(f, hit.blob, hit.canvas, hit.sw, hit.sh);
+    const [fw, fh] = finalDims(hit.sw, hit.sh, f);
+    setOut(f, hit.blob, hit.canvas, fw, fh);
     return;
   }
 
-  const c = makeCanvas(img, w, h, mime);
+  const c = makeCanvas(img, w, h, mime, f, s);
   const b = await toBlobP(c, mime, mime === 'image/png' ? undefined : s.q);
   if (!b) throw new Error('encode failed');
-  setOut(f, b, c, w, h);
+  const [fw, fh] = finalDims(w, h, f);
+  setOut(f, b, c, fw, fh);
+}
+
+async function reprocessOne(f) {
+  f.outBlob = null; f.outSize = null; f.thumb = null;
+  render();
+  try { await compressOne(f, settings()); } catch (e) { f.error = true; }
+  render();
 }
 
 // ---------- render ----------
@@ -417,6 +498,12 @@ function render() {
           <button class="btn primary" data-i="${i}" ${f.outBlob ? '' : 'disabled'}>⬇ Save</button>
           <button class="btn ghost rm" data-r="${i}" title="Remove">✕</button>
         </div>
+        <div class="trow">
+          <button class="tbtn" data-rl="${i}" title="Rotate left 90°">↺</button>
+          <button class="tbtn" data-rr="${i}" title="Rotate right 90°">↻</button>
+          <button class="tbtn" data-fh="${i}" title="Flip horizontal">⇋</button>
+          <button class="tbtn" data-fv="${i}" title="Flip vertical">⇅</button>
+        </div>
       </div>`;
     list.appendChild(d);
   });
@@ -426,6 +513,18 @@ function render() {
   });
   list.querySelectorAll('[data-r]').forEach(b => b.onclick = () => {
     files.splice(+b.dataset.r, 1); render();
+  });
+  list.querySelectorAll('[data-rl]').forEach(b => b.onclick = () => {
+    const f = files[+b.dataset.rl]; f.rot = ((f.rot || 0) + 270) % 360; reprocessOne(f);
+  });
+  list.querySelectorAll('[data-rr]').forEach(b => b.onclick = () => {
+    const f = files[+b.dataset.rr]; f.rot = ((f.rot || 0) + 90) % 360; reprocessOne(f);
+  });
+  list.querySelectorAll('[data-fh]').forEach(b => b.onclick = () => {
+    const f = files[+b.dataset.fh]; f.flipH = !f.flipH; reprocessOne(f);
+  });
+  list.querySelectorAll('[data-fv]').forEach(b => b.onclick = () => {
+    const f = files[+b.dataset.fv]; f.flipV = !f.flipV; reprocessOne(f);
   });
 }
 
@@ -441,11 +540,70 @@ function dl(url, name) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
-$('dlall').addEventListener('click', () => {
-  files.forEach((f, i) => {
-    if (!f.outBlob) return;
-    setTimeout(() => dl(URL.createObjectURL(f.outBlob), baseName(f.name) + '.' + extFor(f.mime)), i * 400);
-  });
+// ---------- ZIP writer (stored entries, no external lib) ----------
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c; }
+  return t;
+})();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+async function makeZip(entries) {
+  const enc = new TextEncoder();
+  const chunks = [], central = [];
+  let offset = 0;
+  const d = new Date();
+  const t = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xFFFF;
+  const dt = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xFFFF;
+  for (const e of entries) {
+    const nameBytes = enc.encode(e.name);
+    const data = new Uint8Array(await e.blob.arrayBuffer());
+    const crc = crc32(data);
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true);
+    lh.setUint16(4, 20, true);
+    lh.setUint16(6, 0x0800, true);
+    lh.setUint16(8, 0, true);
+    lh.setUint16(10, t, true); lh.setUint16(12, dt, true);
+    lh.setUint32(14, crc, true);
+    lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true);
+    lh.setUint16(26, nameBytes.length, true); lh.setUint16(28, 0, true);
+    chunks.push(new Uint8Array(lh.buffer), nameBytes, data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true);
+    ch.setUint16(4, 20, true); ch.setUint16(6, 20, true);
+    ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true);
+    ch.setUint16(12, t, true); ch.setUint16(14, dt, true);
+    ch.setUint32(16, crc, true);
+    ch.setUint32(20, data.length, true); ch.setUint32(24, data.length, true);
+    ch.setUint16(28, nameBytes.length, true);
+    ch.setUint32(42, offset, true);
+    central.push(new Uint8Array(ch.buffer), nameBytes);
+    offset += 30 + nameBytes.length + data.length;
+  }
+  const cdStart = offset;
+  let cdSize = 0; central.forEach(c => cdSize += c.length);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, entries.length, true); end.setUint16(10, entries.length, true);
+  end.setUint32(12, cdSize, true); end.setUint32(16, cdStart, true);
+  return new Blob([...chunks, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
+}
+
+$('dlall').addEventListener('click', async () => {
+  const btn = $('dlall'), old = btn.textContent;
+  btn.disabled = true; btn.textContent = '📦 Zipping…';
+  const seen = {}, entries = [];
+  for (const f of files) {
+    if (!f.outBlob) continue;
+    let name = baseName(f.name) + '.' + extFor(f.mime);
+    if (seen[name]) { seen[name]++; name = baseName(f.name) + '-' + seen[name] + '.' + extFor(f.mime); }
+    else seen[name] = 1;
+    entries.push({ name, blob: f.outBlob });
+  }
+  const zip = await makeZip(entries);
+  dl(URL.createObjectURL(zip), 'pixlite-images.zip');
+  btn.disabled = false; btn.textContent = old;
 });
 </script>
 </body>
