@@ -1,5 +1,7 @@
 # PixLite — Free Image Compressor
 
+![PixLite preview](pixlite-browser-mockup.png)
+
 Compress and resize images **right in your browser**. No upload, no signup — your photos never leave your device.
 
 ## Features
